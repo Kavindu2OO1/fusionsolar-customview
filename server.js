@@ -32,12 +32,6 @@ app.use(cors({
 
 app.use(express.json());
 
-// Serve static files from the React app build directory (for production)
-if (process.env.NODE_ENV === 'production') {
-  console.log('Serving static files from build directory');
-  app.use(express.static(path.join(__dirname, 'build')));
-}
-
 // Add logging middleware
 app.use((req, res, next) => {
   console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
@@ -47,13 +41,15 @@ app.use((req, res, next) => {
   next();
 });
 
-// Health check endpoint for Railway
+// Health check endpoint for Railway - MUST be before static file serving
 app.get('/health', (req, res) => {
-  res.json({ 
+  console.log('Health check called');
+  res.status(200).json({ 
     status: 'healthy', 
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || 'development',
-    port: PORT
+    port: PORT,
+    uptime: process.uptime()
   });
 });
 
@@ -65,6 +61,23 @@ app.get('/test', (req, res) => {
     timestamp: new Date().toISOString()
   });
 });
+
+// Serve static files from the React app build directory (for production)
+if (process.env.NODE_ENV === 'production') {
+  console.log('Serving static files from build directory');
+  const buildPath = path.join(__dirname, 'build');
+  console.log('Build path:', buildPath);
+  
+  // Check if build directory exists
+  const fs = require('fs');
+  if (fs.existsSync(buildPath)) {
+    console.log('Build directory found, serving static files');
+    app.use(express.static(buildPath));
+  } else {
+    console.error('Build directory not found at:', buildPath);
+    console.log('Available directories:', fs.readdirSync(__dirname));
+  }
+}
 
 // Login endpoint - special case
 app.post('/api/huawei/login', async (req, res) => {
@@ -215,11 +228,29 @@ if (process.env.NODE_ENV === 'production') {
   app.get('*', (req, res) => {
     const indexPath = path.join(__dirname, 'build', 'index.html');
     console.log('Serving index.html from:', indexPath);
-    res.sendFile(indexPath);
+    
+    // Check if the file exists before trying to serve it
+    const fs = require('fs');
+    if (fs.existsSync(indexPath)) {
+      res.sendFile(indexPath);
+    } else {
+      console.error('index.html not found at:', indexPath);
+      res.status(500).send('Application build not found. Please ensure the build process completed successfully.');
+    }
   });
 }
 
-app.listen(PORT, '0.0.0.0', () => {
+// Error handling middleware
+app.use((err, req, res, next) => {
+  console.error('Express error:', err);
+  res.status(500).json({
+    success: false,
+    error: 'Internal server error',
+    details: process.env.NODE_ENV === 'development' ? err.message : 'Something went wrong'
+  });
+});
+
+const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`🏥 Health check: http://localhost:${PORT}/health`);
@@ -232,4 +263,12 @@ app.listen(PORT, '0.0.0.0', () => {
   if (process.env.NODE_ENV === 'production') {
     console.log('🌐 Serving React app from /build directory');
   }
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received, shutting down gracefully');
+  server.close(() => {
+    console.log('Process terminated');
+  });
 });
